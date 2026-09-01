@@ -1,0 +1,27 @@
+{
+  "name": "chat-stickers",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "sync": "node scripts/sync-server.mjs"
+  },
+  "dependencies": {
+    "pinia": "^4.0.3",
+    "vue": "^3.5.40",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "@vue/tsconfig": "^0.9.1",
+    "prettier": "^3.9.6",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.0",
+    "vite-plugin-singlefile": "^2.3.3",
+    "vue-tsc": "^3.3.8"
+  }
+}
