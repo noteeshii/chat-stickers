@@ -107,7 +107,7 @@ function sendProfileSnapshot(client, profile) {
 
 function clampSetting(value, fallback) {
   return Number.isFinite(value)
-    ? Math.min(80, Math.max(0, Number(value)))
+    ? Math.min(100, Math.max(0, Number(value)))
     : fallback;
 }
 

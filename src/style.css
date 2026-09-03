@@ -129,8 +129,8 @@ h1 em:after {
   color: #626159;
 }
 .workspace {
-  display: grid;
-  grid-template-columns: 390px 1fr;
+  display: flex;
+  flex-direction: column;
   border: 1px solid #aaa99f;
   background: #f3f1e9;
 }
@@ -138,6 +138,95 @@ h1 em:after {
   min-width: 0;
   padding: 28px;
   border-right: 1px solid #aaa99f;
+}
+
+.horizontal-controls {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 18px;
+  border-right: 0;
+  border-bottom: 1px solid #aaa99f;
+  padding: 22px 24px;
+}
+
+.horizontal-controls .card-heading {
+  grid-column: 1 / -1;
+  margin-bottom: 0;
+}
+
+.horizontal-controls .profile-controls {
+  grid-column: span 2;
+  margin: 0;
+}
+
+.horizontal-controls .setting-field,
+.horizontal-controls .reward-toggle {
+  align-self: end;
+  min-width: 0;
+}
+
+.horizontal-controls .setting-field > label,
+.horizontal-controls .profile-controls > label:first-child {
+  margin-top: 0;
+}
+
+.horizontal-controls .reward-toggle {
+  min-height: 54px;
+  margin: 0;
+}
+
+.horizontal-controls .safe-settings-group {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 150px 240px minmax(0, 1fr);
+  align-items: end;
+  gap: 18px;
+  border-top: 1px solid #c8c6bc;
+  padding-top: 18px;
+}
+
+.horizontal-controls .setting-divider {
+  align-self: center;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.horizontal-controls .exclusion-toggle {
+  min-height: 54px;
+  margin: 0;
+}
+
+.horizontal-controls .safe-controls {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.horizontal-controls .safe-controls label {
+  margin: 0;
+}
+
+.horizontal-controls .connection-controls {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.horizontal-controls .connection-controls .primary {
+  width: min(280px, 100%);
+  margin-top: 0;
+}
+
+.horizontal-controls .connection-states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+}
+
+.horizontal-controls .status,
+.horizontal-controls .sync-state {
+  margin-top: 0;
 }
 .card-heading {
   display: flex;
@@ -197,13 +286,65 @@ label output {
 }
 
 .profile-picker {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 48px;
   margin-bottom: 12px;
 }
 
-.profile-picker select,
-.profile-name-input {
+.profile-menu {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 4px);
+  right: 48px;
+  left: 0;
+  max-height: 230px;
+  overflow-y: auto;
+  border: 1px solid #171713;
+  background: #fffef8;
+  box-shadow: 5px 6px 0 #17171333;
+}
+
+.profile-menu button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  border-bottom: 1px solid #d2d0c7;
+  padding: 10px 12px;
+  background: transparent;
+  color: #171713;
+  text-align: left;
+}
+
+.profile-menu button:last-child {
+  border-bottom: 0;
+}
+
+.profile-menu button:hover,
+.profile-menu button.active {
+  background: #e9ddff;
+}
+
+.profile-menu button.active::before {
+  content: "•";
+  color: #6a28ff;
+}
+
+.profile-menu button.active span {
+  margin-right: auto;
+}
+
+.profile-menu small {
+  color: #77756c;
+  font: 500 8px DM Mono;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+}
+
+.profile-combobox {
   min-width: 0;
   width: 100%;
   height: 44px;
@@ -214,7 +355,7 @@ label output {
   font-weight: 700;
 }
 
-.profile-picker button {
+.profile-picker > .profile-add-button {
   border: 1px solid #171713;
   border-left: 0;
   background: #d8ff39;
@@ -224,9 +365,6 @@ label output {
   cursor: pointer;
 }
 
-.profile-name-input {
-  margin-bottom: 4px;
-}
 .range {
   width: 100%;
   accent-color: #6a28ff;
@@ -356,7 +494,9 @@ label output {
   overflow: hidden;
 }
 .stage.mini {
-  height: 430px;
+  width: 100%;
+  min-height: 560px;
+  aspect-ratio: 16 / 9;
   background-color: #252525;
   background-image:
     linear-gradient(45deg, #2d2d2d 25%, transparent 25%),
@@ -369,6 +509,24 @@ label output {
     0 12px,
     12px -12px,
     -12px 0;
+}
+
+@media (max-width: 1100px) {
+  .horizontal-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .horizontal-controls .profile-controls {
+    grid-column: 1 / -1;
+  }
+
+  .horizontal-controls .safe-settings-group {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .horizontal-controls .safe-controls {
+    grid-column: 1 / -1;
+  }
 }
 .safe-area {
   position: absolute;
@@ -1471,7 +1629,7 @@ footer {
     margin: 30px 0 0;
   }
   .workspace {
-    grid-template-columns: 1fr;
+    display: flex;
   }
   .control-card {
     border-right: 0;
@@ -1487,6 +1645,28 @@ footer {
     letter-spacing: -3px;
   }
   .stage.mini {
-    height: 360px;
+    min-height: 360px;
+    aspect-ratio: auto;
+  }
+
+  .horizontal-controls {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .horizontal-controls .safe-settings-group {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .horizontal-controls .safe-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .horizontal-controls .connection-controls,
+  .horizontal-controls .connection-states {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
