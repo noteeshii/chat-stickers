@@ -21,3 +21,22 @@ export type Sticker = {
   roles: UserRole[];
   customRewardId?: string | null;
 };
+
+export type OverlaySettings = {
+  channel: string;
+  lifetime: number;
+  rewardMode: boolean;
+  safeTop: number;
+  safeRight: number;
+  safeBottom: number;
+  safeLeft: number;
+  safeAreaExcluded: boolean;
+};
+
+export type OverlayProfile = {
+  id: string;
+  name: string;
+  updatedAt: number;
+  settings: OverlaySettings;
+  clientCount?: number;
+};

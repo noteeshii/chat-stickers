@@ -14,6 +14,7 @@ defineEmits<{
 }>();
 
 const channel = defineModel<string>("channel", { required: true });
+const profileName = defineModel<string>("profileName", { required: true });
 const lifetime = defineModel<number>("lifetime", { required: true });
 const rewardMode = defineModel<boolean>("rewardMode", { required: true });
 const safeTop = defineModel<number>("safeTop", { required: true });
@@ -43,6 +44,7 @@ const isOpen = defineModel<boolean>("open", { default: false });
     </div>
 
     <ChatSetup
+      v-model:profile-name="profileName"
       v-model:channel="channel"
       v-model:lifetime="lifetime"
       v-model:reward-mode="rewardMode"

@@ -191,6 +191,42 @@ label output {
   background: transparent;
   font-weight: 700;
 }
+
+.profile-controls {
+  margin-bottom: 22px;
+}
+
+.profile-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px;
+  margin-bottom: 12px;
+}
+
+.profile-picker select,
+.profile-name-input {
+  min-width: 0;
+  width: 100%;
+  height: 44px;
+  border: 1px solid #aaa99f;
+  padding: 0 12px;
+  background: #fffef8;
+  color: #171713;
+  font-weight: 700;
+}
+
+.profile-picker button {
+  border: 1px solid #171713;
+  border-left: 0;
+  background: #d8ff39;
+  color: #171713;
+  font-size: 24px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.profile-name-input {
+  margin-bottom: 4px;
+}
 .range {
   width: 100%;
   accent-color: #6a28ff;

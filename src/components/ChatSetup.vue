@@ -1,12 +1,20 @@
 <script setup lang="ts">
-import type { ConnectionStatus } from "../types";
+import type { ConnectionStatus, OverlayProfile } from "../types";
 defineProps<{
   status: ConnectionStatus;
   statusText: string;
   syncStatus: "connecting" | "connected" | "disconnected";
   syncStatusText: string;
+  profileControls?: boolean;
+  profileId?: string;
+  profiles?: OverlayProfile[];
 }>();
-defineEmits<{ connect: [] }>();
+defineEmits<{
+  connect: [];
+  selectProfile: [id: string];
+  createProfile: [];
+}>();
+const profileName = defineModel<string>("profileName", { required: true });
 const channel = defineModel<string>("channel", { required: true });
 const lifetime = defineModel<number>("lifetime", { required: true });
 const rewardMode = defineModel<boolean>("rewardMode", { required: true });
@@ -27,6 +35,42 @@ const safeAreaExcluded = defineModel<boolean>("safeAreaExcluded", {
         <p>Токен и бот не нужны</p>
       </div>
     </div>
+
+    <div v-if="profileControls" class="profile-controls">
+      <label>ПРОФИЛЬ ОВЕРЛЕЯ</label>
+      <div class="profile-picker">
+        <select
+          :value="profileId"
+          @change="
+            $emit('selectProfile', ($event.target as HTMLSelectElement).value)
+          "
+        >
+          <option
+            v-for="profile in profiles"
+            :key="profile.id"
+            :value="profile.id"
+          >
+            {{ profile.name }} ·
+            {{ profile.settings.rewardMode ? "награды" : "чат" }}
+            {{ profile.clientCount ? ` · ${profile.clientCount}` : "" }}
+          </option>
+        </select>
+        <button
+          type="button"
+          title="Создать профиль"
+          @click="$emit('createProfile')"
+        >
+          +
+        </button>
+      </div>
+      <label>НАЗВАНИЕ ПРОФИЛЯ</label>
+      <input
+        v-model="profileName"
+        class="profile-name-input"
+        autocomplete="off"
+      />
+    </div>
+
     <label>КАНАЛ TWITCH</label>
     <div class="channel-input">
       <b>#</b

@@ -12,6 +12,9 @@ import { useChatStickersStore } from "./stores/chatStickers";
 const store = useChatStickersStore();
 const {
   isOverlay,
+  profileId,
+  profileName,
+  profiles,
   channel,
   lifetime,
   rewardMode,
@@ -34,6 +37,8 @@ const {
   initialize,
   dispose,
   copyOverlayUrl,
+  selectProfile,
+  createProfile,
   toggleStickerPin,
   moveSticker,
   removeSticker,
@@ -51,6 +56,7 @@ onBeforeUnmount(dispose);
       <HeroSection />
       <div class="workspace">
         <ChatSetup
+          v-model:profile-name="profileName"
           v-model:channel="channel"
           v-model:lifetime="lifetime"
           v-model:reward-mode="rewardMode"
@@ -63,6 +69,11 @@ onBeforeUnmount(dispose);
           :status-text="statusText"
           :sync-status="syncStatus"
           :sync-status-text="syncStatusText"
+          :profile-id="profileId"
+          :profiles="profiles"
+          profile-controls
+          @select-profile="selectProfile"
+          @create-profile="createProfile"
           @connect="connect"
         />
         <StickerStage
@@ -107,6 +118,7 @@ onBeforeUnmount(dispose);
     <OverlaySettings
       v-if="isOverlay"
       v-model:open="overlaySettingsOpen"
+      v-model:profile-name="profileName"
       v-model:channel="channel"
       v-model:lifetime="lifetime"
       v-model:reward-mode="rewardMode"

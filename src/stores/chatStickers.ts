@@ -1,22 +1,28 @@
 import { computed, ref, watch } from "vue";
 import { defineStore } from "pinia";
-import type { ConnectionStatus, Sticker } from "../types";
+import type { ConnectionStatus, OverlayProfile, Sticker } from "../types";
 
-type SyncedSettings = {
-  channel: string;
-  lifetime: number;
-  rewardMode: boolean;
-  safeTop: number;
-  safeRight: number;
-  safeBottom: number;
-  safeLeft: number;
-  safeAreaExcluded: boolean;
-};
+type SyncedSettings = OverlayProfile["settings"];
 
 type StickerSyncAction =
   | { action: "pin"; stickerId: string; pinned: boolean }
   | { action: "move"; stickerId: string; x: number; y: number }
   | { action: "remove"; stickerId: string };
+
+function createProfileId() {
+  return (
+    globalThis.crypto?.randomUUID?.() ||
+    `profile-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  );
+}
+
+function readStoredProfile(id: string): OverlayProfile | null {
+  try {
+    return JSON.parse(localStorage.getItem(`sticker-profile-${id}`) || "null");
+  } catch {
+    return null;
+  }
+}
 
 export const useChatStickersStore = defineStore("chat-stickers", () => {
   const params = new URLSearchParams(location.search);
@@ -25,8 +31,32 @@ export const useChatStickersStore = defineStore("chat-stickers", () => {
     typeof obsWindow.obsstudio !== "undefined" ||
     navigator.userAgent.toLowerCase().includes("obs");
   const isOverlay = ref(params.get("overlay") === "1" || isRunningInObs);
+  const initialProfileId =
+    params.get("profileId") ||
+    localStorage.getItem("sticker-active-profile") ||
+    createProfileId();
+  const storedProfile = readStoredProfile(initialProfileId);
+  const urlUpdatedAt = Number(params.get("profileUpdatedAt")) || 0;
+  const useStoredProfile =
+    storedProfile && storedProfile.updatedAt > urlUpdatedAt;
+  const sourceProfile = useStoredProfile ? storedProfile : null;
+  const legacySafeHorizontal = Number(
+    params.get("safeX") || localStorage.getItem("sticker-safe-horizontal") || 8,
+  );
+  const legacySafeVertical = Number(
+    params.get("safeY") || localStorage.getItem("sticker-safe-vertical") || 8,
+  );
+
+  const profileId = ref(initialProfileId);
+  const profileName = ref(
+    sourceProfile?.name || params.get("profileName") || "Основной оверлей",
+  );
+  const profileUpdatedAt = ref(
+    sourceProfile?.updatedAt || urlUpdatedAt || Date.now(),
+  );
   const channel = ref(
     (
+      sourceProfile?.settings.channel ||
       params.get("channel") ||
       localStorage.getItem("sticker-channel") ||
       ""
@@ -34,51 +64,55 @@ export const useChatStickersStore = defineStore("chat-stickers", () => {
   );
   const lifetime = ref(
     Number(
-      params.get("lifetime") || localStorage.getItem("sticker-lifetime") || 12,
+      sourceProfile?.settings.lifetime ??
+        params.get("lifetime") ??
+        localStorage.getItem("sticker-lifetime") ??
+        12,
     ),
   );
   const rewardMode = ref(
-    params.get("rewardMode") === "1" ||
-      localStorage.getItem("sticker-reward-mode") === "true",
-  );
-  const legacySafeHorizontal = Number(
-    params.get("safeX") || localStorage.getItem("sticker-safe-horizontal") || 8,
-  );
-  const legacySafeVertical = Number(
-    params.get("safeY") || localStorage.getItem("sticker-safe-vertical") || 8,
+    sourceProfile?.settings.rewardMode ??
+      (params.get("rewardMode") === "1" ||
+        localStorage.getItem("sticker-reward-mode") === "true"),
   );
   const safeTop = ref(
     Number(
-      params.get("safeTop") ||
-        localStorage.getItem("sticker-safe-top") ||
+      sourceProfile?.settings.safeTop ??
+        params.get("safeTop") ??
+        localStorage.getItem("sticker-safe-top") ??
         legacySafeVertical,
     ),
   );
   const safeRight = ref(
     Number(
-      params.get("safeRight") ||
-        localStorage.getItem("sticker-safe-right") ||
+      sourceProfile?.settings.safeRight ??
+        params.get("safeRight") ??
+        localStorage.getItem("sticker-safe-right") ??
         legacySafeHorizontal,
     ),
   );
   const safeBottom = ref(
     Number(
-      params.get("safeBottom") ||
-        localStorage.getItem("sticker-safe-bottom") ||
+      sourceProfile?.settings.safeBottom ??
+        params.get("safeBottom") ??
+        localStorage.getItem("sticker-safe-bottom") ??
         legacySafeVertical,
     ),
   );
   const safeLeft = ref(
     Number(
-      params.get("safeLeft") ||
-        localStorage.getItem("sticker-safe-left") ||
+      sourceProfile?.settings.safeLeft ??
+        params.get("safeLeft") ??
+        localStorage.getItem("sticker-safe-left") ??
         legacySafeHorizontal,
     ),
   );
   const safeAreaExcluded = ref(
-    params.get("safeMode") === "exclude" ||
-      localStorage.getItem("sticker-safe-mode") === "exclude",
+    sourceProfile?.settings.safeAreaExcluded ??
+      (params.get("safeMode") === "exclude" ||
+        localStorage.getItem("sticker-safe-mode") === "exclude"),
   );
+  const profiles = ref<OverlayProfile[]>([]);
   const status = ref<ConnectionStatus>("idle");
   const syncStatus = ref<"connecting" | "connected" | "disconnected">(
     "connecting",
@@ -90,7 +124,7 @@ export const useChatStickersStore = defineStore("chat-stickers", () => {
   let settingsBroadcastFrame = 0;
   let stickerMoveBroadcastFrame = 0;
   let syncIsDisposed = false;
-  let applyingRemoteSettings = false;
+  let applyingRemoteProfile = false;
   const pendingStickerMoves = new Map<string, { x: number; y: number }>();
 
   const statusText = computed(
@@ -106,7 +140,7 @@ export const useChatStickersStore = defineStore("chat-stickers", () => {
     () =>
       ({
         connecting: "Синхронизация подключается…",
-        connected: "Сервер управляет стикерами",
+        connected: `Профиль: ${profileName.value}`,
         disconnected: "Запустите npm run sync",
       })[syncStatus.value],
   );
@@ -114,6 +148,9 @@ export const useChatStickersStore = defineStore("chat-stickers", () => {
     const pageUrl = location.href.split(/[?#]/)[0];
     const overlayParams = new URLSearchParams({
       overlay: "1",
+      profileId: profileId.value,
+      profileName: profileName.value,
+      profileUpdatedAt: String(profileUpdatedAt.value),
       channel: channel.value.trim().toLowerCase(),
       lifetime: String(lifetime.value),
       rewardMode: rewardMode.value ? "1" : "0",
@@ -123,11 +160,10 @@ export const useChatStickersStore = defineStore("chat-stickers", () => {
       safeLeft: String(safeLeft.value),
       safeMode: safeAreaExcluded.value ? "exclude" : "contain",
     });
-
     return `${pageUrl}?${overlayParams.toString()}`;
   });
 
-  function getSyncedSettings(): SyncedSettings {
+  function getSettings(): SyncedSettings {
     return {
       channel: channel.value,
       lifetime: lifetime.value,
@@ -140,41 +176,57 @@ export const useChatStickersStore = defineStore("chat-stickers", () => {
     };
   }
 
+  function getProfile(): OverlayProfile {
+    return {
+      id: profileId.value,
+      name: profileName.value,
+      updatedAt: profileUpdatedAt.value,
+      settings: getSettings(),
+    };
+  }
+
   function send(message: object) {
     if (syncSocket?.readyState === WebSocket.OPEN) {
       syncSocket.send(JSON.stringify(message));
     }
   }
 
-  function sendSettings() {
+  function persistProfile() {
+    const profile = getProfile();
+    localStorage.setItem("sticker-active-profile", profile.id);
+    localStorage.setItem(
+      `sticker-profile-${profile.id}`,
+      JSON.stringify(profile),
+    );
+    localStorage.setItem("sticker-channel", channel.value);
+  }
+
+  function sendProfileUpdate() {
     settingsBroadcastFrame = 0;
-    send({ type: "settings", settings: getSyncedSettings() });
+    send({ type: "profile-update", profile: getProfile() });
   }
 
-  function queueSettingsBroadcast() {
-    if (!applyingRemoteSettings && !settingsBroadcastFrame) {
-      settingsBroadcastFrame = requestAnimationFrame(sendSettings);
+  function queueProfileUpdate() {
+    if (!applyingRemoteProfile && !settingsBroadcastFrame) {
+      settingsBroadcastFrame = requestAnimationFrame(sendProfileUpdate);
     }
   }
 
-  function applySyncedSettings(settings: Partial<SyncedSettings>) {
-    applyingRemoteSettings = true;
-    if (typeof settings.channel === "string") channel.value = settings.channel;
-    if (typeof settings.lifetime === "number")
-      lifetime.value = settings.lifetime;
-    if (typeof settings.rewardMode === "boolean")
-      rewardMode.value = settings.rewardMode;
-    if (typeof settings.safeTop === "number") safeTop.value = settings.safeTop;
-    if (typeof settings.safeRight === "number")
-      safeRight.value = settings.safeRight;
-    if (typeof settings.safeBottom === "number")
-      safeBottom.value = settings.safeBottom;
-    if (typeof settings.safeLeft === "number")
-      safeLeft.value = settings.safeLeft;
-    if (typeof settings.safeAreaExcluded === "boolean") {
-      safeAreaExcluded.value = settings.safeAreaExcluded;
-    }
-    applyingRemoteSettings = false;
+  function applyProfile(profile: OverlayProfile) {
+    if (!profile || profile.id !== profileId.value) return;
+    applyingRemoteProfile = true;
+    profileName.value = profile.name;
+    profileUpdatedAt.value = profile.updatedAt;
+    channel.value = profile.settings.channel;
+    lifetime.value = profile.settings.lifetime;
+    rewardMode.value = profile.settings.rewardMode;
+    safeTop.value = profile.settings.safeTop;
+    safeRight.value = profile.settings.safeRight;
+    safeBottom.value = profile.settings.safeBottom;
+    safeLeft.value = profile.settings.safeLeft;
+    safeAreaExcluded.value = profile.settings.safeAreaExcluded;
+    applyingRemoteProfile = false;
+    persistProfile();
   }
 
   function connectSettingsSync() {
@@ -187,19 +239,28 @@ export const useChatStickersStore = defineStore("chat-stickers", () => {
       send({
         type: "hello",
         role: isOverlay.value ? "overlay" : "controller",
-        settings: getSyncedSettings(),
+        profile: getProfile(),
       });
-      if (!isOverlay.value) sendSettings();
     });
-
     syncSocket.addEventListener("message", (event) => {
       try {
         const message = JSON.parse(String(event.data));
-        if (message.type === "settings" && message.settings) {
-          applySyncedSettings(message.settings);
-        } else if (message.type === "chat-status" && message.status) {
+        if (message.type === "profile" && message.profile) {
+          applyProfile(message.profile);
+        } else if (
+          message.type === "profile-list" &&
+          Array.isArray(message.profiles)
+        ) {
+          profiles.value = message.profiles;
+        } else if (
+          message.type === "chat-status" &&
+          message.profileId === profileId.value
+        ) {
           status.value = message.status;
-        } else if (message.type === "stickers") {
+        } else if (
+          message.type === "stickers" &&
+          message.profileId === profileId.value
+        ) {
           stickers.value = Array.isArray(message.stickers)
             ? message.stickers
             : [];
@@ -209,7 +270,6 @@ export const useChatStickersStore = defineStore("chat-stickers", () => {
         // Игнорируем сообщения неизвестного формата.
       }
     });
-
     syncSocket.addEventListener("close", () => {
       syncStatus.value = "disconnected";
       status.value = "error";
@@ -222,25 +282,47 @@ export const useChatStickersStore = defineStore("chat-stickers", () => {
     });
   }
 
+  function selectProfile(id: string) {
+    const selected = profiles.value.find((profile) => profile.id === id);
+    if (!selected) return;
+    profileId.value = id;
+    stickers.value = [];
+    queuedStickerCount.value = 0;
+    status.value = "idle";
+    localStorage.setItem("sticker-active-profile", id);
+    send({ type: "select-profile", profileId: id });
+  }
+
+  function createProfile() {
+    profileId.value = createProfileId();
+    profileName.value = `Профиль ${profiles.value.length + 1}`;
+    profileUpdatedAt.value = Math.max(Date.now(), profileUpdatedAt.value + 1);
+    stickers.value = [];
+    queuedStickerCount.value = 0;
+    status.value = "idle";
+    persistProfile();
+    send({ type: "profile-update", profile: getProfile() });
+  }
+
   function connect() {
     const cleanChannel = channel.value
       .trim()
       .toLowerCase()
       .replace(/^[@#]/, "");
     if (!cleanChannel) return;
-
     channel.value = cleanChannel;
-    persistSettings();
+    profileUpdatedAt.value = Math.max(Date.now(), profileUpdatedAt.value + 1);
+    persistProfile();
     status.value = "connecting";
-    send({ type: "connect-chat", settings: getSyncedSettings() });
+    send({ type: "connect-chat", profile: getProfile() });
   }
 
   function addDemoSticker() {
-    send({ type: "demo" });
+    send({ type: "demo", profileId: profileId.value });
   }
 
   function sendStickerAction(action: StickerSyncAction) {
-    send({ type: "sticker-action", ...action });
+    send({ type: "sticker-action", profileId: profileId.value, ...action });
   }
 
   function toggleStickerPin(id: number) {
@@ -264,7 +346,6 @@ export const useChatStickersStore = defineStore("chat-stickers", () => {
   function moveSticker(id: number, x: number, y: number) {
     const sticker = stickers.value.find((item) => item.id === id);
     if (!sticker) return;
-
     pendingStickerMoves.set(sticker.syncId, { x, y });
     if (!stickerMoveBroadcastFrame) {
       stickerMoveBroadcastFrame = requestAnimationFrame(flushStickerMoves);
@@ -273,27 +354,13 @@ export const useChatStickersStore = defineStore("chat-stickers", () => {
 
   function removeSticker(id: number) {
     const sticker = stickers.value.find((item) => item.id === id);
-    if (sticker) {
+    if (sticker)
       sendStickerAction({ action: "remove", stickerId: sticker.syncId });
-    }
-  }
-
-  function persistSettings() {
-    localStorage.setItem("sticker-channel", channel.value);
-    localStorage.setItem("sticker-lifetime", String(lifetime.value));
-    localStorage.setItem("sticker-reward-mode", String(rewardMode.value));
-    localStorage.setItem("sticker-safe-top", String(safeTop.value));
-    localStorage.setItem("sticker-safe-right", String(safeRight.value));
-    localStorage.setItem("sticker-safe-bottom", String(safeBottom.value));
-    localStorage.setItem("sticker-safe-left", String(safeLeft.value));
-    localStorage.setItem(
-      "sticker-safe-mode",
-      safeAreaExcluded.value ? "exclude" : "contain",
-    );
   }
 
   function initialize() {
     syncIsDisposed = false;
+    persistProfile();
     connectSettingsSync();
   }
 
@@ -312,6 +379,7 @@ export const useChatStickersStore = defineStore("chat-stickers", () => {
 
   watch(
     [
+      profileName,
       channel,
       lifetime,
       rewardMode,
@@ -322,14 +390,19 @@ export const useChatStickersStore = defineStore("chat-stickers", () => {
       safeAreaExcluded,
     ],
     () => {
-      persistSettings();
-      queueSettingsBroadcast();
+      if (applyingRemoteProfile) return;
+      profileUpdatedAt.value = Math.max(Date.now(), profileUpdatedAt.value + 1);
+      persistProfile();
+      queueProfileUpdate();
     },
     { flush: "sync" },
   );
 
   return {
     isOverlay,
+    profileId,
+    profileName,
+    profiles,
     channel,
     lifetime,
     rewardMode,
@@ -345,6 +418,8 @@ export const useChatStickersStore = defineStore("chat-stickers", () => {
     statusText,
     syncStatusText,
     overlayUrl,
+    selectProfile,
+    createProfile,
     connect,
     addDemoSticker,
     initialize,

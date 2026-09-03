@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { WebSocket, WebSocketServer } from "ws";
 
 const host = "127.0.0.1";
-const port = 17891;
+const port = Number(process.env.CHAT_STICKERS_SYNC_PORT) || 17891;
 const maximumVisibleStickers = 10;
 const stickerGap = 2;
 const temporaryRewardId = "8581cf28-1f69-4c05-9795-a7700b19c088";
@@ -21,12 +21,6 @@ const demoMessages = [
   ["mooncat", "Ещё один раунд? 👀", ["vip"]],
   ["quiet_wizard", "GG! Вот это концовка", ["subscriber"]],
 ];
-const effectChances = [
-  ["polychrome", 0.01],
-  ["holographic", 0.03],
-  ["gold", 0.05],
-  ["foil", 0.07],
-];
 const defaultSettings = {
   channel: "",
   lifetime: 12,
@@ -39,15 +33,8 @@ const defaultSettings = {
 };
 
 const server = new WebSocketServer({ host, port });
-let settings = { ...defaultSettings };
-let stickers = [];
-let stickerQueue = [];
-let nextId = 1;
-let nextDemo = 0;
-let twitchSocket = null;
-let twitchReconnectTimer = null;
-let requestedChannel = "";
-let chatStatus = "idle";
+const profiles = new Map();
+const twitchConnections = new Map();
 let isShuttingDown = false;
 
 function send(client, message) {
@@ -55,21 +42,67 @@ function send(client, message) {
     client.send(JSON.stringify(message));
 }
 
-function broadcast(message) {
-  for (const client of server.clients) send(client, message);
+function broadcast(message, predicate = () => true) {
+  for (const client of server.clients) {
+    if (predicate(client)) send(client, message);
+  }
 }
 
-function broadcastSettings() {
-  broadcast({ type: "settings", settings });
+function profileSummary(profile) {
+  return {
+    id: profile.id,
+    name: profile.name,
+    updatedAt: profile.updatedAt,
+    settings: profile.settings,
+    clientCount: [...server.clients].filter(
+      (client) => client.profileId === profile.id,
+    ).length,
+  };
 }
 
-function broadcastState() {
-  broadcast({ type: "stickers", stickers, queueSize: stickerQueue.length });
+function broadcastProfileList() {
+  broadcast(
+    {
+      type: "profile-list",
+      profiles: [...profiles.values()].map(profileSummary),
+    },
+    (client) => client.role === "controller",
+  );
 }
 
-function setChatStatus(status) {
-  chatStatus = status;
-  broadcast({ type: "chat-status", status });
+function broadcastToProfile(profile, message) {
+  broadcast(message, (client) => client.profileId === profile.id);
+}
+
+function broadcastProfile(profile) {
+  broadcastToProfile(profile, {
+    type: "profile",
+    profile: profileSummary(profile),
+  });
+}
+
+function broadcastStickers(profile) {
+  broadcastToProfile(profile, {
+    type: "stickers",
+    profileId: profile.id,
+    stickers: profile.stickers,
+    queueSize: profile.queue.length,
+  });
+}
+
+function sendProfileSnapshot(client, profile) {
+  send(client, { type: "profile", profile: profileSummary(profile) });
+  send(client, {
+    type: "chat-status",
+    profileId: profile.id,
+    status: getChatStatus(profile.settings.channel),
+  });
+  send(client, {
+    type: "stickers",
+    profileId: profile.id,
+    stickers: profile.stickers,
+    queueSize: profile.queue.length,
+  });
 }
 
 function clampSetting(value, fallback) {
@@ -78,54 +111,87 @@ function clampSetting(value, fallback) {
     : fallback;
 }
 
-function sanitizeSettings(value = {}) {
+function sanitizeSettings(value = {}, current = defaultSettings) {
   return {
     channel:
       typeof value.channel === "string"
         ? value.channel.trim().toLowerCase().replace(/^[@#]/, "")
-        : settings.channel,
+        : current.channel,
     lifetime: Number.isFinite(value.lifetime)
       ? Math.max(2, Number(value.lifetime))
-      : settings.lifetime,
+      : current.lifetime,
     rewardMode:
       typeof value.rewardMode === "boolean"
         ? value.rewardMode
-        : settings.rewardMode,
-    safeTop: clampSetting(value.safeTop, settings.safeTop),
-    safeRight: clampSetting(value.safeRight, settings.safeRight),
-    safeBottom: clampSetting(value.safeBottom, settings.safeBottom),
-    safeLeft: clampSetting(value.safeLeft, settings.safeLeft),
+        : current.rewardMode,
+    safeTop: clampSetting(value.safeTop, current.safeTop),
+    safeRight: clampSetting(value.safeRight, current.safeRight),
+    safeBottom: clampSetting(value.safeBottom, current.safeBottom),
+    safeLeft: clampSetting(value.safeLeft, current.safeLeft),
     safeAreaExcluded:
       typeof value.safeAreaExcluded === "boolean"
         ? value.safeAreaExcluded
-        : settings.safeAreaExcluded,
+        : current.safeAreaExcluded,
   };
 }
 
-function applySettings(value) {
-  const previous = settings;
-  settings = sanitizeSettings(value);
+function createProfile(payload) {
+  const profile = {
+    id: payload.id,
+    name: payload.name?.trim() || "Новый профиль",
+    updatedAt: Number(payload.updatedAt) || Date.now(),
+    settings: sanitizeSettings(payload.settings),
+    stickers: [],
+    queue: [],
+    nextId: 1,
+    nextDemo: 0,
+  };
+  profiles.set(profile.id, profile);
+  broadcastProfileList();
+  return profile;
+}
 
-  if (previous.safeAreaExcluded !== settings.safeAreaExcluded) {
-    stickers = [];
-    stickerQueue = [];
-    broadcastState();
+function upsertProfile(payload) {
+  if (!payload?.id) return null;
+  const existing = profiles.get(payload.id);
+  if (!existing) return createProfile(payload);
+
+  const incomingUpdatedAt = Number(payload.updatedAt) || 0;
+  if (incomingUpdatedAt <= existing.updatedAt) return existing;
+
+  const oldSettings = existing.settings;
+  existing.name = payload.name?.trim() || existing.name;
+  existing.updatedAt = incomingUpdatedAt || Date.now();
+  existing.settings = sanitizeSettings(payload.settings, existing.settings);
+
+  if (oldSettings.safeAreaExcluded !== existing.settings.safeAreaExcluded) {
+    existing.stickers = [];
+    existing.queue = [];
+    broadcastStickers(existing);
   }
 
-  broadcastSettings();
+  broadcastProfile(existing);
+  broadcastProfileList();
+  return existing;
 }
 
 function getRandomEffect() {
   const roll = Math.random();
   let total = 0;
-  for (const [effect, chance] of effectChances) {
+  for (const [effect, chance] of [
+    ["polychrome", 0.01],
+    ["holographic", 0.03],
+    ["gold", 0.05],
+    ["foil", 0.07],
+  ]) {
     total += chance;
     if (roll < total) return effect;
   }
   return "none";
 }
 
-function getStickerFootprint() {
+function getStickerFootprint(profile) {
+  const settings = profile.settings;
   const horizontalScale = settings.safeAreaExcluded
     ? 1
     : Math.max(0.2, (100 - settings.safeLeft - settings.safeRight) / 100);
@@ -138,7 +204,8 @@ function getStickerFootprint() {
   };
 }
 
-function positionIsAllowed(x, y) {
+function positionIsAllowed(profile, x, y) {
+  const settings = profile.settings;
   if (!settings.safeAreaExcluded) return true;
   return (
     x < settings.safeLeft ||
@@ -148,9 +215,9 @@ function positionIsAllowed(x, y) {
   );
 }
 
-function positionOverlapsSticker(x, y, footprint, ignoredSyncId) {
-  return stickers.some((sticker) => {
-    if (sticker.syncId === ignoredSyncId || sticker.leaving) return false;
+function positionOverlaps(profile, x, y, footprint) {
+  return profile.stickers.some((sticker) => {
+    if (sticker.leaving) return false;
     return !(
       x + footprint.width + stickerGap <= sticker.x ||
       x >= sticker.x + footprint.width + stickerGap ||
@@ -160,8 +227,8 @@ function positionOverlapsSticker(x, y, footprint, ignoredSyncId) {
   });
 }
 
-function findAvailablePosition() {
-  const footprint = getStickerFootprint();
+function findAvailablePosition(profile) {
+  const footprint = getStickerFootprint(profile);
   const maximumX = Math.max(0, 100 - footprint.width);
   const maximumY = Math.max(0, 100 - footprint.height);
   const candidates = [];
@@ -181,43 +248,37 @@ function findAvailablePosition() {
   candidates.sort(() => Math.random() - 0.5);
   return candidates.find(
     ({ x, y }) =>
-      positionIsAllowed(x, y) && !positionOverlapsSticker(x, y, footprint),
+      positionIsAllowed(profile, x, y) &&
+      !positionOverlaps(profile, x, y, footprint),
   );
 }
 
-function addSticker(
-  author,
-  text,
-  roles = [],
-  syncId = randomUUID(),
-  options = {},
-) {
+function addSticker(profile, author, text, roles = [], sourceId, options = {}) {
   const queuedSticker = {
-    syncId: syncId || randomUUID(),
+    syncId: `${profile.id}:${sourceId || randomUUID()}`,
     author,
     text: text.slice(0, 220),
     roles,
     effect: getRandomEffect(),
     pinned: options.pinned === true,
     customRewardId: options.customRewardId || null,
-    lifetimeMs: options.lifetimeMs ?? settings.lifetime * 1000,
+    lifetimeMs: options.lifetimeMs ?? profile.settings.lifetime * 1000,
     forceExpiry: options.forceExpiry === true,
   };
 
   if (
-    stickers.length >= maximumVisibleStickers ||
-    !showSticker(queuedSticker)
+    profile.stickers.length >= maximumVisibleStickers ||
+    !showSticker(profile, queuedSticker)
   ) {
-    stickerQueue.push(queuedSticker);
-    broadcastState();
+    profile.queue.push(queuedSticker);
+    broadcastStickers(profile);
   }
 }
 
-function showSticker(queuedSticker) {
-  const position = findAvailablePosition();
+function showSticker(profile, queuedSticker) {
+  const position = findAvailablePosition(profile);
   if (!position) return false;
-
-  const id = nextId++;
+  const id = profile.nextId++;
   const sticker = {
     id,
     syncId: queuedSticker.syncId,
@@ -233,85 +294,72 @@ function showSticker(queuedSticker) {
     roles: queuedSticker.roles,
     customRewardId: queuedSticker.customRewardId,
   };
-  stickers.push(sticker);
-  broadcastState();
+  profile.stickers.push(sticker);
+  broadcastStickers(profile);
 
-  const delay = queuedSticker.lifetimeMs;
   setTimeout(() => {
-    const current = findSticker(sticker.syncId);
+    const current = findSticker(profile, sticker.syncId);
     if (current && (queuedSticker.forceExpiry || !current.pinned)) {
-      beginLeaving(sticker.syncId);
+      beginLeaving(profile, sticker.syncId);
     }
-  }, delay);
+  }, queuedSticker.lifetimeMs);
   return true;
 }
 
-function findSticker(syncId) {
-  return stickers.find((sticker) => sticker.syncId === syncId);
+function findSticker(profile, syncId) {
+  return profile.stickers.find((sticker) => sticker.syncId === syncId);
 }
 
-function beginLeaving(syncId) {
-  const sticker = findSticker(syncId);
+function beginLeaving(profile, syncId) {
+  const sticker = findSticker(profile, syncId);
   if (!sticker || sticker.leaving) return;
   sticker.leaving = true;
-  broadcastState();
-  setTimeout(() => removeSticker(syncId), 900);
+  broadcastStickers(profile);
+  setTimeout(() => removeSticker(profile, syncId), 900);
 }
 
-function removeSticker(syncId) {
-  if (!findSticker(syncId)) return;
-  stickers = stickers.filter((sticker) => sticker.syncId !== syncId);
-  releaseQueuedStickers();
-  broadcastState();
+function removeSticker(profile, syncId) {
+  if (!findSticker(profile, syncId)) return;
+  profile.stickers = profile.stickers.filter((item) => item.syncId !== syncId);
+  releaseQueue(profile);
+  broadcastStickers(profile);
 }
 
-function releaseQueuedStickers() {
-  while (stickers.length < maximumVisibleStickers && stickerQueue.length) {
-    const nextSticker = stickerQueue.shift();
-    if (!showSticker(nextSticker)) {
-      stickerQueue.unshift(nextSticker);
+function releaseQueue(profile) {
+  while (
+    profile.stickers.length < maximumVisibleStickers &&
+    profile.queue.length
+  ) {
+    const nextSticker = profile.queue.shift();
+    if (!showSticker(profile, nextSticker)) {
+      profile.queue.unshift(nextSticker);
       break;
     }
   }
 }
 
-function removeStickersForReward(customRewardId) {
-  stickers = stickers.filter(
-    (sticker) => sticker.customRewardId !== customRewardId,
-  );
-  stickerQueue = stickerQueue.filter(
-    (sticker) => sticker.customRewardId !== customRewardId,
-  );
-}
-
-function applyStickerAction(message) {
-  const sticker = findSticker(message.stickerId);
+function applyStickerAction(profile, message) {
+  const sticker = findSticker(profile, message.stickerId);
   if (!sticker) return;
-
   if (message.action === "pin") {
     if (message.pinned) {
       sticker.pinned = true;
       sticker.leaving = false;
-      broadcastState();
+      broadcastStickers(profile);
     } else {
       sticker.pinned = false;
-      beginLeaving(sticker.syncId);
+      beginLeaving(profile, sticker.syncId);
     }
-    return;
-  }
-
-  if (message.action === "move") {
+  } else if (message.action === "move") {
     const x = Number(message.x);
     const y = Number(message.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-
     sticker.x = x;
     sticker.y = y;
-    broadcastState();
-    return;
+    broadcastStickers(profile);
+  } else if (message.action === "remove") {
+    removeSticker(profile, sticker.syncId);
   }
-
-  if (message.action === "remove") removeSticker(sticker.syncId);
 }
 
 function parseTags(rawTags = "") {
@@ -328,9 +376,10 @@ function parseTags(rawTags = "") {
   );
 }
 
-function parseTwitchLine(line) {
+function parseTwitchLine(channel, line) {
+  const connection = twitchConnections.get(channel);
   if (line.startsWith("PING")) {
-    twitchSocket?.send("PONG :tmi.twitch.tv");
+    connection?.socket?.send("PONG :tmi.twitch.tv");
     return;
   }
   const match = line.match(
@@ -340,131 +389,192 @@ function parseTwitchLine(line) {
 
   const tags = parseTags(match[1]);
   const customRewardId = tags["custom-reward-id"];
-  if (
-    settings.rewardMode &&
-    customRewardId !== temporaryRewardId &&
-    customRewardId !== pinnedRewardId
-  )
-    return;
-
   const badges = (tags.badges || "")
     .split(",")
     .map((badge) => badge.split("/")[0]);
-  const roles = [];
-  const isChannelOwner = match[2].toLowerCase() === settings.channel;
 
-  if (isChannelOwner) roles.push("channelOwner");
-  if (badges.includes("moderator") || tags.mod === "1") roles.push("moderator");
-  if (badges.includes("vip")) roles.push("vip");
-  if (
-    !isChannelOwner &&
-    (badges.includes("subscriber") || tags.subscriber === "1")
-  )
-    roles.push("subscriber");
-  const stickerOptions =
-    settings.rewardMode && customRewardId === pinnedRewardId
-      ? {
-          pinned: true,
-          customRewardId,
-          lifetimeMs: pinnedRewardLifetime,
-          forceExpiry: true,
-        }
-      : {
-          customRewardId: settings.rewardMode ? customRewardId : null,
-        };
+  for (const profile of profiles.values()) {
+    if (profile.settings.channel !== channel) continue;
+    if (
+      profile.settings.rewardMode &&
+      customRewardId !== temporaryRewardId &&
+      customRewardId !== pinnedRewardId
+    ) {
+      continue;
+    }
+    if (!profile.settings.rewardMode && customRewardId) {
+      continue;
+    }
 
-  if (settings.rewardMode && customRewardId === pinnedRewardId) {
-    removeStickersForReward(pinnedRewardId);
+    const roles = [];
+    const isOwner = match[2].toLowerCase() === channel;
+    if (isOwner) roles.push("channelOwner");
+    if (badges.includes("moderator") || tags.mod === "1")
+      roles.push("moderator");
+    if (badges.includes("vip")) roles.push("vip");
+    if (
+      !isOwner &&
+      (badges.includes("subscriber") || tags.subscriber === "1")
+    ) {
+      roles.push("subscriber");
+    }
+
+    const options =
+      profile.settings.rewardMode && customRewardId === pinnedRewardId
+        ? {
+            pinned: true,
+            customRewardId,
+            lifetimeMs: pinnedRewardLifetime,
+            forceExpiry: true,
+          }
+        : {
+            customRewardId: profile.settings.rewardMode ? customRewardId : null,
+          };
+
+    if (profile.settings.rewardMode && customRewardId === pinnedRewardId) {
+      profile.stickers = profile.stickers.filter(
+        (sticker) => sticker.customRewardId !== pinnedRewardId,
+      );
+      profile.queue = profile.queue.filter(
+        (sticker) => sticker.customRewardId !== pinnedRewardId,
+      );
+    }
+    addSticker(
+      profile,
+      tags["display-name"] || match[2],
+      match[3],
+      roles,
+      tags.id,
+      options,
+    );
   }
-
-  addSticker(
-    tags["display-name"] || match[2],
-    match[3],
-    roles,
-    tags.id,
-    stickerOptions,
-  );
 }
 
-function connectToTwitch(channel = settings.channel) {
+function getChatStatus(channel) {
+  if (!channel) return "idle";
+  return twitchConnections.get(channel)?.status || "idle";
+}
+
+function broadcastChatStatus(channel, status) {
+  for (const profile of profiles.values()) {
+    if (profile.settings.channel === channel) {
+      broadcastToProfile(profile, {
+        type: "chat-status",
+        profileId: profile.id,
+        status,
+      });
+    }
+  }
+}
+
+function connectToTwitch(channel) {
   const cleanChannel = channel.trim().toLowerCase().replace(/^[@#]/, "");
-  clearTimeout(twitchReconnectTimer);
-  requestedChannel = cleanChannel;
+  if (!cleanChannel) return;
+  const existing = twitchConnections.get(cleanChannel);
+  if (existing?.status === "connected" || existing?.status === "connecting")
+    return;
 
-  if (twitchSocket) {
-    twitchSocket.removeAllListeners();
-    twitchSocket.close();
-    twitchSocket = null;
-  }
-  if (!cleanChannel) return void setChatStatus("idle");
+  if (existing?.reconnectTimer) clearTimeout(existing.reconnectTimer);
+  const state = existing || {
+    socket: null,
+    status: "idle",
+    reconnectTimer: null,
+  };
+  state.status = "connecting";
+  twitchConnections.set(cleanChannel, state);
+  broadcastChatStatus(cleanChannel, "connecting");
 
-  setChatStatus("connecting");
-  const connection = new WebSocket("wss://irc-ws.chat.twitch.tv:443");
-  twitchSocket = connection;
-  connection.on("open", () => {
-    if (connection !== twitchSocket) return;
+  const socket = new WebSocket("wss://irc-ws.chat.twitch.tv:443");
+  state.socket = socket;
+  socket.on("open", () => {
+    if (state.socket !== socket) return;
     const nick = `justinfan${Math.floor(10000 + Math.random() * 80000)}`;
-    connection.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
-    connection.send("PASS SCHMOOPIIE");
-    connection.send(`NICK ${nick}`);
-    connection.send(`JOIN #${cleanChannel}`);
-    setChatStatus("connected");
+    socket.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
+    socket.send("PASS SCHMOOPIIE");
+    socket.send(`NICK ${nick}`);
+    socket.send(`JOIN #${cleanChannel}`);
+    state.status = "connected";
+    broadcastChatStatus(cleanChannel, "connected");
   });
-  connection.on("message", (data) =>
-    String(data).split("\r\n").forEach(parseTwitchLine),
-  );
-  connection.on("close", () => {
-    if (connection !== twitchSocket) return;
-    twitchSocket = null;
-    setChatStatus("error");
-    twitchReconnectTimer = setTimeout(() => {
-      if (requestedChannel === cleanChannel) connectToTwitch(cleanChannel);
-    }, 3000);
+  socket.on("message", (data) => {
+    String(data)
+      .split("\r\n")
+      .forEach((line) => parseTwitchLine(cleanChannel, line));
   });
-  connection.on("error", () => {
-    if (connection === twitchSocket) setChatStatus("error");
+  socket.on("close", () => {
+    if (state.socket !== socket || isShuttingDown) return;
+    state.socket = null;
+    state.status = "error";
+    broadcastChatStatus(cleanChannel, "error");
+    state.reconnectTimer = setTimeout(
+      () => connectToTwitch(cleanChannel),
+      3000,
+    );
   });
-}
-
-function sendSnapshot(client) {
-  send(client, { type: "settings", settings });
-  send(client, { type: "chat-status", status: chatStatus });
-  send(client, { type: "stickers", stickers, queueSize: stickerQueue.length });
+  socket.on("error", () => {
+    if (state.socket === socket) {
+      state.status = "error";
+      broadcastChatStatus(cleanChannel, "error");
+    }
+  });
 }
 
 server.on("connection", (client) => {
+  client.role = "unknown";
+  client.profileId = null;
+
   client.on("message", (rawMessage) => {
     try {
       const message = JSON.parse(rawMessage.toString());
       if (message.type === "hello") {
-        if (!settings.channel && message.settings) {
-          applySettings(message.settings);
-          if (message.role === "overlay" && settings.channel) connectToTwitch();
+        client.role = message.role;
+        const profile = upsertProfile(message.profile);
+        if (profile) {
+          client.profileId = profile.id;
+          sendProfileSnapshot(client, profile);
+          if (message.role === "overlay" && profile.settings.channel) {
+            connectToTwitch(profile.settings.channel);
+          }
+          broadcastProfileList();
         }
-        sendSnapshot(client);
-      } else if (message.type === "settings" && message.settings) {
-        applySettings(message.settings);
-      } else if (message.type === "connect-chat" && message.settings) {
-        applySettings(message.settings);
-        connectToTwitch();
-      } else if (message.type === "sticker-action" && message.stickerId) {
-        applyStickerAction(message);
+      } else if (message.type === "select-profile") {
+        const profile = profiles.get(message.profileId);
+        if (profile) {
+          client.profileId = profile.id;
+          sendProfileSnapshot(client, profile);
+          broadcastProfileList();
+        }
+      } else if (message.type === "profile-update") {
+        const profile = upsertProfile(message.profile);
+        if (profile) {
+          client.profileId = profile.id;
+          sendProfileSnapshot(client, profile);
+        }
+      } else if (message.type === "connect-chat") {
+        const profile = upsertProfile(message.profile);
+        if (profile) connectToTwitch(profile.settings.channel);
+      } else if (message.type === "sticker-action") {
+        const profile = profiles.get(message.profileId || client.profileId);
+        if (profile && message.stickerId) applyStickerAction(profile, message);
       } else if (message.type === "demo") {
-        const [author, text, roles] =
-          demoMessages[nextDemo % demoMessages.length];
-        nextDemo += 1;
-        addSticker(author, text, roles);
+        const profile = profiles.get(message.profileId || client.profileId);
+        if (profile) {
+          const demo = demoMessages[profile.nextDemo % demoMessages.length];
+          profile.nextDemo += 1;
+          addSticker(profile, demo[0], demo[1], demo[2]);
+        }
       }
     } catch {
       send(client, { type: "error", message: "Некорректное сообщение" });
     }
   });
+  client.on("close", broadcastProfileList);
 });
 
 server.on("listening", () => {
   console.log(`Chat Stickers sync: ws://${host}:${port}`);
-  console.log("Twitch-чат подключается через этот процесс.");
-  console.log("Оставьте это окно открытым во время трансляции.");
+  console.log("Профили создаются автоматически при подключении OBS.");
+  console.log("Для остановки нажмите Ctrl+C.");
 });
 server.on("error", (error) => {
   console.error(
@@ -477,27 +587,18 @@ server.on("error", (error) => {
 
 function shutdown() {
   if (isShuttingDown) return;
-
   isShuttingDown = true;
   console.log("\nЗавершаем Chat Stickers sync…");
-  clearTimeout(twitchReconnectTimer);
-  requestedChannel = "";
-
-  if (twitchSocket) {
-    twitchSocket.removeAllListeners();
-    twitchSocket.terminate();
-    twitchSocket = null;
+  for (const state of twitchConnections.values()) {
+    clearTimeout(state.reconnectTimer);
+    state.socket?.removeAllListeners();
+    state.socket?.terminate();
   }
-
-  for (const client of server.clients) {
-    client.terminate();
-  }
-
+  for (const client of server.clients) client.terminate();
   server.close(() => {
     console.log("Сервер остановлен.");
     process.exit(0);
   });
-
   setTimeout(() => process.exit(0), 1000).unref();
 }
 
