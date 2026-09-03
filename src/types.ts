@@ -3,7 +3,8 @@ export type ConnectionStatus = "idle" | "connecting" | "connected" | "error";
 export type StickerEffect =
   "none" | "foil" | "holographic" | "polychrome" | "gold";
 
-export type UserRole = "moderator" | "vip" | "subscriber" | "follower";
+export type UserRole =
+  "channelOwner" | "moderator" | "vip" | "subscriber" | "follower";
 
 export type Sticker = {
   id: number;
@@ -18,4 +19,5 @@ export type Sticker = {
   pinned: boolean;
   effect: StickerEffect;
   roles: UserRole[];
+  customRewardId?: string | null;
 };

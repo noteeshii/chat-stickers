@@ -6,6 +6,7 @@ defineProps<{
 }>();
 
 const badgeNames: Record<UserRole, string> = {
+  channelOwner: "Владелец канала",
   moderator: "Модератор",
   vip: "VIP",
   subscriber: "Подписчик",
@@ -22,7 +23,30 @@ const badgeNames: Record<UserRole, string> = {
       :title="badgeNames[role]"
       :aria-label="badgeNames[role]"
     >
-      <svg v-if="role === 'moderator'" viewBox="0 0 20 20" aria-hidden="true">
+      <svg
+        v-if="role === 'channelOwner'"
+        viewBox="0 0 20 20"
+        aria-hidden="true"
+      >
+        <path
+          class="cherry-stems"
+          d="M6.2 11.1C7 7.3 9.1 3.8 12.8 2.1M12.8 2.1c1.9 2.6 2.9 5.7 2.8 9"
+        />
+        <path
+          class="cherry-leaf"
+          d="M12 2.8C8.7 1.5 5.9 2.7 4.6 6.2 8 6.5 10.7 5.2 12 2.8Z"
+        />
+        <path
+          class="cherry-fruit"
+          d="M6.1 9.7c2.9 0 4.8 1.8 4.6 4.5-.2 2.6-2.1 4.3-4.8 4.3-2.8 0-4.7-1.8-4.7-4.5 0-2.6 2-4.3 4.9-4.3Zm8.9 0c2.5-.1 4 1.6 3.9 4.2-.1 2.8-2 4.6-4.8 4.6-2.7 0-4.5-1.7-4.5-4.3 0-2.7 2-4.4 5.4-4.5Z"
+        />
+      </svg>
+
+      <svg
+        v-else-if="role === 'moderator'"
+        viewBox="0 0 20 20"
+        aria-hidden="true"
+      >
         <path d="m15.2 1.5 3.3 3.3-9.1 9.1-3.3-3.3 9.1-9.1Z" />
         <path d="m4.9 9.4 5.7 5.7-1.8 1.8-5.7-5.7 1.8-1.8Z" />
         <path d="m4.5 13.6 1.9 1.9-3 3H1.5v-1.9l3-3Z" />

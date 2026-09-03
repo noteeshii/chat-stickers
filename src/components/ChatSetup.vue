@@ -45,7 +45,7 @@ const safeAreaExcluded = defineModel<boolean>("safeAreaExcluded", {
     <label class="mode-toggle">
       <span>
         РЕЖИМ НАГРАД
-        <small>Только сообщения за баллы канала</small>
+        <small>Только сообщения выбранных наград</small>
       </span>
       <input v-model="rewardMode" type="checkbox" />
       <i />

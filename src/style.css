@@ -1109,6 +1109,22 @@ label output {
   color: #fff;
 }
 
+.user-badge--channelOwner {
+  background: linear-gradient(145deg, #72152f, #bd3155);
+  color: #fff;
+}
+
+.user-badge--channelOwner .cherry-stems {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.6;
+}
+
+.user-badge--channelOwner .cherry-leaf,
+.user-badge--channelOwner .cherry-fruit {
+  stroke: none;
+}
+
 .user-badge--vip svg path:first-child {
   stroke: none;
 }

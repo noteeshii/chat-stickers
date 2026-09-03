@@ -5,6 +5,9 @@ const host = "127.0.0.1";
 const port = 17891;
 const maximumVisibleStickers = 10;
 const stickerGap = 2;
+const temporaryRewardId = "8581cf28-1f69-4c05-9795-a7700b19c088";
+const pinnedRewardId = "aced2e10-3cf0-4b7d-9774-6ede44271d5b";
+const pinnedRewardLifetime = 10 * 60 * 1000;
 const colors = [
   "#ffd84d",
   "#ff8fb8",
@@ -109,19 +112,6 @@ function applySettings(value) {
     broadcastState();
   }
 
-  if (previous.rewardMode !== settings.rewardMode) {
-    stickerQueue = [];
-    if (settings.rewardMode) {
-      stickers = stickers.length ? [stickers.at(-1)] : [];
-      if (stickers[0]) stickers[0].leaving = false;
-    } else {
-      for (const sticker of [...stickers]) {
-        if (!sticker.pinned) beginLeaving(sticker.syncId);
-      }
-    }
-    broadcastState();
-  }
-
   broadcastSettings();
 }
 
@@ -195,22 +185,24 @@ function findAvailablePosition() {
   );
 }
 
-function addSticker(author, text, roles = [], syncId = randomUUID()) {
+function addSticker(
+  author,
+  text,
+  roles = [],
+  syncId = randomUUID(),
+  options = {},
+) {
   const queuedSticker = {
     syncId: syncId || randomUUID(),
     author,
     text: text.slice(0, 220),
     roles,
     effect: getRandomEffect(),
+    pinned: options.pinned === true,
+    customRewardId: options.customRewardId || null,
+    lifetimeMs: options.lifetimeMs ?? settings.lifetime * 1000,
+    forceExpiry: options.forceExpiry === true,
   };
-
-  if (settings.rewardMode) {
-    const currentSticker = stickers[0];
-    if (!currentSticker) return void showSticker(queuedSticker);
-    stickerQueue = [queuedSticker];
-    beginLeaving(currentSticker.syncId);
-    return;
-  }
 
   if (
     stickers.length >= maximumVisibleStickers ||
@@ -236,28 +228,21 @@ function showSticker(queuedSticker) {
     y: position.y,
     rotation: -6 + Math.random() * 12,
     leaving: false,
-    pinned: false,
+    pinned: queuedSticker.pinned,
     effect: queuedSticker.effect,
     roles: queuedSticker.roles,
+    customRewardId: queuedSticker.customRewardId,
   };
   stickers.push(sticker);
   broadcastState();
 
-  if (!settings.rewardMode) {
-    const delay = settings.lifetime * 1000;
-    setTimeout(() => {
-      const current = findSticker(sticker.syncId);
-      if (current && !current.pinned && !settings.rewardMode) {
-        current.leaving = true;
-        broadcastState();
-      }
-    }, delay);
-    setTimeout(() => {
-      const current = findSticker(sticker.syncId);
-      if (current && !current.pinned && !settings.rewardMode)
-        removeSticker(sticker.syncId);
-    }, delay + 900);
-  }
+  const delay = queuedSticker.lifetimeMs;
+  setTimeout(() => {
+    const current = findSticker(sticker.syncId);
+    if (current && (queuedSticker.forceExpiry || !current.pinned)) {
+      beginLeaving(sticker.syncId);
+    }
+  }, delay);
   return true;
 }
 
@@ -281,14 +266,22 @@ function removeSticker(syncId) {
 }
 
 function releaseQueuedStickers() {
-  const limit = settings.rewardMode ? 1 : maximumVisibleStickers;
-  while (stickers.length < limit && stickerQueue.length) {
+  while (stickers.length < maximumVisibleStickers && stickerQueue.length) {
     const nextSticker = stickerQueue.shift();
     if (!showSticker(nextSticker)) {
       stickerQueue.unshift(nextSticker);
       break;
     }
   }
+}
+
+function removeStickersForReward(customRewardId) {
+  stickers = stickers.filter(
+    (sticker) => sticker.customRewardId !== customRewardId,
+  );
+  stickerQueue = stickerQueue.filter(
+    (sticker) => sticker.customRewardId !== customRewardId,
+  );
 }
 
 function applyStickerAction(message) {
@@ -346,20 +339,51 @@ function parseTwitchLine(line) {
   if (!match) return;
 
   const tags = parseTags(match[1]);
-  const isReward =
-    Boolean(tags["custom-reward-id"]) ||
-    ["highlighted-message", "skip-subs-mode-message"].includes(tags["msg-id"]);
-  if (settings.rewardMode && !isReward) return;
+  const customRewardId = tags["custom-reward-id"];
+  if (
+    settings.rewardMode &&
+    customRewardId !== temporaryRewardId &&
+    customRewardId !== pinnedRewardId
+  )
+    return;
 
   const badges = (tags.badges || "")
     .split(",")
     .map((badge) => badge.split("/")[0]);
   const roles = [];
+  const isChannelOwner = match[2].toLowerCase() === settings.channel;
+
+  if (isChannelOwner) roles.push("channelOwner");
   if (badges.includes("moderator") || tags.mod === "1") roles.push("moderator");
   if (badges.includes("vip")) roles.push("vip");
-  if (badges.includes("subscriber") || tags.subscriber === "1")
+  if (
+    !isChannelOwner &&
+    (badges.includes("subscriber") || tags.subscriber === "1")
+  )
     roles.push("subscriber");
-  addSticker(tags["display-name"] || match[2], match[3], roles, tags.id);
+  const stickerOptions =
+    settings.rewardMode && customRewardId === pinnedRewardId
+      ? {
+          pinned: true,
+          customRewardId,
+          lifetimeMs: pinnedRewardLifetime,
+          forceExpiry: true,
+        }
+      : {
+          customRewardId: settings.rewardMode ? customRewardId : null,
+        };
+
+  if (settings.rewardMode && customRewardId === pinnedRewardId) {
+    removeStickersForReward(pinnedRewardId);
+  }
+
+  addSticker(
+    tags["display-name"] || match[2],
+    match[3],
+    roles,
+    tags.id,
+    stickerOptions,
+  );
 }
 
 function connectToTwitch(channel = settings.channel) {
