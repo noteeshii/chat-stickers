@@ -1,12 +1,12 @@
-import { randomUUID } from "node:crypto";
-import { WebSocket, WebSocketServer } from "ws";
+import {randomUUID} from "node:crypto";
+import {WebSocket, WebSocketServer} from "ws";
 
 const host = "127.0.0.1";
 const port = Number(process.env.CHAT_STICKERS_SYNC_PORT) || 17891;
 const maximumVisibleStickers = 10;
 const stickerGap = 2;
-const temporaryRewardId = "8581cf28-1f69-4c05-9795-a7700b19c088";
-const pinnedRewardId = "aced2e10-3cf0-4b7d-9774-6ede44271d5b";
+const temporaryRewardId = "f34391e1-6624-4239-9ab8-99ee935728f3";
+const pinnedRewardId = "43c13c5b-dc6b-4b03-993f-e2321e663734";
 const pinnedRewardLifetime = 10 * 60 * 1000;
 const colors = [
   "#ffd84d",
@@ -32,7 +32,7 @@ const defaultSettings = {
   safeAreaExcluded: false,
 };
 
-const server = new WebSocketServer({ host, port });
+const server = new WebSocketServer({host, port});
 const profiles = new Map();
 const twitchConnections = new Map();
 let isShuttingDown = false;
@@ -91,7 +91,7 @@ function broadcastStickers(profile) {
 }
 
 function sendProfileSnapshot(client, profile) {
-  send(client, { type: "profile", profile: profileSummary(profile) });
+  send(client, {type: "profile", profile: profileSummary(profile)});
   send(client, {
     type: "chat-status",
     profileId: profile.id,
@@ -241,13 +241,13 @@ function findAvailablePosition(profile) {
   }
   for (let y = 0; y <= maximumY; y += footprint.height + stickerGap) {
     for (let x = 0; x <= maximumX; x += footprint.width + stickerGap) {
-      candidates.push({ x, y });
+      candidates.push({x, y});
     }
   }
 
   candidates.sort(() => Math.random() - 0.5);
   return candidates.find(
-    ({ x, y }) =>
+    ({x, y}) =>
       positionIsAllowed(profile, x, y) &&
       !positionOverlaps(profile, x, y, footprint),
   );
@@ -422,14 +422,14 @@ function parseTwitchLine(channel, line) {
     const options =
       profile.settings.rewardMode && customRewardId === pinnedRewardId
         ? {
-            pinned: true,
-            customRewardId,
-            lifetimeMs: pinnedRewardLifetime,
-            forceExpiry: true,
-          }
+          pinned: true,
+          customRewardId,
+          lifetimeMs: pinnedRewardLifetime,
+          forceExpiry: true,
+        }
         : {
-            customRewardId: profile.settings.rewardMode ? customRewardId : null,
-          };
+          customRewardId: profile.settings.rewardMode ? customRewardId : null,
+        };
 
     if (profile.settings.rewardMode && customRewardId === pinnedRewardId) {
       profile.stickers = profile.stickers.filter(
@@ -565,7 +565,7 @@ server.on("connection", (client) => {
         }
       }
     } catch {
-      send(client, { type: "error", message: "Некорректное сообщение" });
+      send(client, {type: "error", message: "Некорректное сообщение"});
     }
   });
   client.on("close", broadcastProfileList);
