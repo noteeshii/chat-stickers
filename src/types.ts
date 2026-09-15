@@ -11,6 +11,7 @@ export type Sticker = {
   syncId: string;
   author: string;
   text: string;
+  content?: MessageFragment[];
   color: string;
   x: number;
   y: number;
@@ -21,6 +22,18 @@ export type Sticker = {
   roles: UserRole[];
   customRewardId?: string | null;
 };
+
+export type MessageFragment =
+  | { type: "text"; text: string }
+  | {
+      type: "emote";
+      provider: "twitch" | "7tv";
+      id: string;
+      code: string;
+      url: string;
+      width?: number;
+      height?: number;
+    };
 
 export type OverlaySettings = {
   channel: string;

@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
-    "sync": "node scripts/sync-server.mjs"
+    "sync": "node scripts/sync-server.mjs",
+    "test": "node --test scripts/tests/*.test.mjs"
   },
   "dependencies": {
     "pinia": "^4.0.3",

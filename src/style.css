@@ -1232,6 +1232,17 @@ label output {
   -webkit-line-clamp: 5;
 }
 
+.message-emote {
+  display: inline-block;
+  height: 1.5em;
+  object-fit: contain;
+  vertical-align: -0.35em;
+}
+
+.message-content {
+  white-space: pre-wrap;
+}
+
 .channel-mention {
   border-radius: 3px;
   padding: 0 3px 1px;

@@ -1,5 +1,6 @@
 import {randomUUID} from "node:crypto";
 import {WebSocket, WebSocketServer} from "ws";
+import { EmoteCatalog, parseMessageContent } from "./emotes.mjs";
 
 const host = "127.0.0.1";
 const port = Number(process.env.CHAT_STICKERS_SYNC_PORT) || 17891;
@@ -34,6 +35,7 @@ const defaultSettings = {
 
 const server = new WebSocketServer({host, port});
 const profiles = new Map();
+const emoteCatalog = new EmoteCatalog();
 const twitchConnections = new Map();
 let isShuttingDown = false;
 
@@ -257,7 +259,8 @@ function addSticker(profile, author, text, roles = [], sourceId, options = {}) {
   const queuedSticker = {
     syncId: `${profile.id}:${sourceId || randomUUID()}`,
     author,
-    text: text.slice(0, 220),
+    text: options.message?.text ?? Array.from(text).slice(0, 220).join(""),
+    content: options.message?.content,
     roles,
     effect: getRandomEffect(),
     pinned: options.pinned === true,
@@ -284,6 +287,7 @@ function showSticker(profile, queuedSticker) {
     syncId: queuedSticker.syncId,
     author: queuedSticker.author,
     text: queuedSticker.text,
+    content: queuedSticker.content,
     color: colors[id % colors.length],
     x: position.x,
     y: position.y,
@@ -388,6 +392,7 @@ function parseTwitchLine(channel, line) {
   if (!match) return;
 
   const tags = parseTags(match[1]);
+  const message = parseMessageContent(match[3], tags.emotes, emoteCatalog.get(tags["room-id"]));
   const customRewardId = tags["custom-reward-id"];
   const badges = (tags.badges || "")
     .split(",")
@@ -445,7 +450,7 @@ function parseTwitchLine(channel, line) {
       match[3],
       roles,
       tags.id,
-      options,
+      { ...options, message },
     );
   }
 }
@@ -484,7 +489,7 @@ function connectToTwitch(channel) {
   twitchConnections.set(cleanChannel, state);
   broadcastChatStatus(cleanChannel, "connecting");
 
-  const socket = new WebSocket("wss://irc-ws.chat.twitch.tv:443");
+  const socket = new WebSocket(process.env.CHAT_STICKERS_TWITCH_URL || "wss://irc-ws.chat.twitch.tv:443");
   state.socket = socket;
   socket.on("open", () => {
     if (state.socket !== socket) return;
@@ -588,6 +593,7 @@ server.on("error", (error) => {
 function shutdown() {
   if (isShuttingDown) return;
   isShuttingDown = true;
+  emoteCatalog.dispose();
   console.log("\nЗавершаем Chat Stickers sync…");
   for (const state of twitchConnections.values()) {
     clearTimeout(state.reconnectTimer);

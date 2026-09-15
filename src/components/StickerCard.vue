@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, type CSSProperties } from "vue";
 import UserBadges from "./UserBadges.vue";
+import MessageContent from "./MessageContent.vue";
 import type { Sticker } from "../types";
 
 const props = defineProps<{
@@ -33,55 +34,6 @@ const effectNames: Record<Sticker["effect"], string> = {
   gold: "ЗОЛОТО",
 };
 
-const messageParts = computed(() => {
-  const channelName = props.channel.trim().replace(/^[@#]/, "");
-
-  if (!channelName) {
-    return [{ text: props.sticker.text, highlighted: false }];
-  }
-
-  const specialCharacters = "\\^$.*+?()[]{}|";
-  const escapedChannel = [...channelName]
-    .map((character) =>
-      specialCharacters.includes(character) ? "\\\\" + character : character,
-    )
-    .join("");
-  const mentionPattern = new RegExp(
-    `(^|[^a-zA-Z0-9_])(@?${escapedChannel})(?=$|[^a-zA-Z0-9_])`,
-    "gi",
-  );
-  const parts: Array<{ text: string; highlighted: boolean }> = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = mentionPattern.exec(props.sticker.text)) !== null) {
-    const mentionStart = match.index + match[1].length;
-
-    if (mentionStart > lastIndex) {
-      parts.push({
-        text: props.sticker.text.slice(lastIndex, mentionStart),
-        highlighted: false,
-      });
-    }
-
-    parts.push({
-      text: match[2],
-      highlighted: true,
-    });
-    lastIndex = mentionStart + match[2].length;
-  }
-
-  if (lastIndex < props.sticker.text.length) {
-    parts.push({
-      text: props.sticker.text.slice(lastIndex),
-      highlighted: false,
-    });
-  }
-
-  return parts.length
-    ? parts
-    : [{ text: props.sticker.text, highlighted: false }];
-});
 
 function startDragging(event: PointerEvent) {
   if (event.button !== 0) {
@@ -204,15 +156,7 @@ function startDragging(event: PointerEvent) {
     <span v-if="sticker.pinned" class="tape tape--clear tape--bottom" />
     <UserBadges :roles="sticker.roles" />
     <b>@{{ sticker.author }}</b>
-    <p>
-      <span
-        v-for="(part, index) in messageParts"
-        :key="index"
-        :class="{ 'channel-mention': part.highlighted }"
-      >
-        {{ part.text }}
-      </span>
-    </p>
+    <MessageContent :text="sticker.text" :content="sticker.content" :channel="channel" />
     <div v-if="sticker.effect !== 'none'" class="sticker-footer">
       <span class="effect-name"> ✦ {{ effectNames[sticker.effect] }} </span>
     </div>
